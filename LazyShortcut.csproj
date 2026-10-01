@@ -11,9 +11,9 @@
     <Title>Lazy Shortcut</Title>
     <ApplicationIcon>image\lazy-shortcut.ico</ApplicationIcon>
     <DefaultItemExcludes>$(DefaultItemExcludes);artifacts\**;bin\**;obj\**</DefaultItemExcludes>
-    <Version>2.1</Version>
-    <AssemblyVersion>2.1.0.0</AssemblyVersion>
-    <FileVersion>2.1.0.0</FileVersion>
+    <Version>2.2</Version>
+    <AssemblyVersion>2.2.0.0</AssemblyVersion>
+    <FileVersion>2.2.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

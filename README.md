@@ -11,17 +11,20 @@ Lazy Shortcut 是給 Windows 使用者的桌面捷徑工具。你可以把專案
 - **拖放建立捷徑**
   把資料夾或檔案拖進視窗，就會加入清單。
 
+- **捷徑排序**
+  可在清單內拖曳排序，也可用右鍵將項目向上或向下移動；不會改動原始檔案。
+
 - **多視窗分組**
   不同專案可拆成不同小視窗管理，不需要全部塞進同一張面板。
 
 - **可改名、可上色**
-  每個小視窗都能改自己的名稱，也能用 RGBA 調色器調整主色與透明度。
+  每個小視窗都能改自己的名稱，也能用色彩方塊、色相條或滴管挑主色，再以數值精確調整 RGB 與透明度。
 
 - **雙擊開啟檔案或資料夾**
   不用再從桌面、下載、CDEF 槽、某個神秘備份資料夾一路翻進去。
 
 - **右鍵快速操作**
-  開啟資料夾、開啟上層資料夾、複製路徑、變更圖示、重設圖示、移除捷徑。
+  可開啟項目、在檔案總管中顯示並選中項目、複製實體項目供檔案總管貼上、複製路徑、變更圖示、重設圖示或移除捷徑。
 
 - **直接在終端機中開啟**
   習慣使用 AI CLI 工作的人可選擇 cmd、Windows PowerShell、PowerShell 7、Git Bash。程式只會列出你電腦上偵測得到的 Shell。
@@ -37,9 +40,16 @@ Lazy Shortcut 是給 Windows 使用者的桌面捷徑工具。你可以把專案
 
 - **桌面小工具模式**
   支援 `Desktop` 與 `Topmost`。想安靜待在桌面就 Desktop，想永遠在眼前就 Topmost。
+  卡片不會出現在 Alt+Tab 清單，拖到螢幕邊緣也不會被 Windows 靠左／靠右（Snap）放大。
 
 - **可選外觀與圖示**
-  內建 Normal、Dark、Glass、Tech、Aero 樣式，也可替每個捷徑換圖示。
+  內建簡約、玻璃、終端機、霓虹四種風格，並可選跟隨 Windows、亮色或暗色。簡約是實色平面卡片，玻璃是半透明漸層與柔和陰影，終端機使用等寬字、命令提示列與細掃描線；群組名稱顯示在命令提示列，按鉛筆時才出現改名輸入框。設定面板會顯示目前預覽，每個捷徑也可使用自訂圖示。
+
+- **多螢幕位置復原**
+  螢幕配置改變後會檢查卡片位置；系統匣可將所有卡片移回主螢幕。
+
+- **四邊與四角調整尺寸**
+  拖曳視窗四邊或四角即可調整卡片大小。
 
 - **系統匣常駐**
   可以全部顯示、全部隱藏、結束。它會在右下角乖乖待命。
@@ -49,7 +59,7 @@ Lazy Shortcut 是給 Windows 使用者的桌面捷徑工具。你可以把專案
 到 GitHub Releases 下載：
 
 ```text
-LazyShortcut-Setup-2.1.exe
+LazyShortcut-Setup-2.2.exe
 ```
 
 雙擊安裝即可。安裝器會：
@@ -71,7 +81,7 @@ LazyShortcut-Setup-2.1.exe
 也提供 ZIP 版本：
 
 ```text
-LazyShortcut-2.1-win-x64.zip
+LazyShortcut-2.2-win-x64.zip
 ```
 
 解壓縮後執行：
@@ -86,12 +96,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 2. 把專案資料夾或檔案拖進任一個小視窗。
 3. 想分組時按右上角 `+` 新增新視窗。
 4. 想命名時按鉛筆圖示，輸入名稱後按 `Enter` 完成。
-5. 想調整辨識色時按色點，直接用 RGBA 調色器挑色，也可手動輸入數值。
+5. 想調整辨識色時按色點：在大色彩方塊選深淺、彩虹條選色相，或按滴管取螢幕上的顏色；RGB 與透明度也可輸入 0–255 數值，透明度滑桿仍可拖曳。按「確定」才會套用到卡片。
 6. 雙擊捷徑開啟檔案或資料夾。
-7. 右鍵捷徑使用更多操作。
-8. 點齒輪調整樣式、視窗模式、語系、Shell、是否隨 Windows 自動啟動。
-9. 不想看到某一張時，右上方打叉只會隱藏目前這張卡片。
-10. 想一次叫回全部卡片時，從系統匣選單使用「全部顯示」。
+7. 在清單內拖曳捷徑排序，或右鍵選擇向上／向下移動。
+8. 右鍵捷徑可選擇「複製項目」，再到檔案總管按 `Ctrl+V` 複製完整檔案或資料夾；也可用「在檔案總管中顯示」反白選中該項目。
+9. 點齒輪調整風格、色系、視窗模式、語系、Shell、是否隨 Windows 自動啟動。
+10. 拖曳視窗四邊或四角即可改變卡片大小。
+11. 不想看到某一張時，右上方打叉只會隱藏目前這張卡片。
+12. 想叫回所有卡片時，從系統匣選單使用「全部顯示」；卡片不在可見位置時使用「將所有卡片移回主螢幕」。
 
 ## Shell 與 AI CLI
 
@@ -121,6 +133,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 - 各群組的捷徑清單
 - 自訂圖示路徑
 - 樣式
+- 色系（跟隨 Windows、亮色或暗色）
 - 視窗模式
 - 語系
 - Shell 偏好
@@ -170,6 +183,14 @@ Uninstall Lazy Shortcut
 dotnet build
 ```
 
+若要更新 `bin\Release\net10.0-windows\LazyShortcut.exe`，先從系統匣選「結束」，再執行：
+
+```powershell
+dotnet build -c Release
+```
+
+`dotnet build` 預設只更新 Debug；正在執行的 EXE 也會鎖住檔案，無法直接覆蓋。
+
 如果使用專案本機 SDK：
 
 ```powershell
@@ -179,20 +200,20 @@ dotnet build
 產生 Release 安裝包：
 
 ```powershell
-.\tools\build-release.ps1 -Version 2.1
+.\tools\build-release.ps1 -Version 2.2
 ```
 
 輸出檔案：
 
 ```text
-artifacts\LazyShortcut-Setup-2.1.exe
-artifacts\LazyShortcut-2.1-win-x64.zip
+artifacts\LazyShortcut-Setup-2.2.exe
+artifacts\LazyShortcut-2.2-win-x64.zip
+```
 
 目前為了讓 `2.1` 既有使用者能直接沿用設定，安裝資料夾與設定檔仍維持在原本相容路徑：
 
 - `%LOCALAPPDATA%\ProjectShortcutDock`
 - `%APPDATA%\ProjectShortcutDock`
-```
 
 ## 版本紀錄
 

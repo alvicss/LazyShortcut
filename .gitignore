@@ -15,7 +15,6 @@ settings.json
 last-error.log
 NuGet.Config
 README.private.md
-docs/TECHNICAL_ARCHITECTURE.md
 tools/generate-project-icon.ps1
 *.user
 *.userprefs
@@ -28,3 +27,9 @@ tools/generate-project-icon.ps1
 *.msi
 *.nupkg
 *.snupkg
+desktop.ini
+
+# 私有開發文件與 AI 協作規則：留在本機，不推上公開 repo
+docs/
+CLAUDE.md
+AGENTS.md

@@ -1,8 +1,15 @@
+// =========================================================
+// 檔案：DockManager.cs
+// 用途：管理捷徑群組視窗、系統匣選單與共用設定保存。
+// 誰會用到：App 啟動時建立，負責協調所有 MainWindow。
+// =========================================================
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using Microsoft.Win32;
 using System.Windows;
+using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 
 namespace ProjectShortcutDock;
@@ -11,7 +18,8 @@ public sealed class DockManager : IDisposable
 {
     private const double DefaultWidth = 360;
     private const double DefaultHeight = 260;
-    private const double CascadeOffset = 26;
+    // 多張卡片錯開排列時，每張往旁邊偏移的距離；MainWindow 把看不到的卡片拉回來時也會用到
+    internal const double CascadeOffset = 26;
 
     private readonly Application _application;
     private readonly List<MainWindow> _windows = new();
@@ -24,6 +32,8 @@ public sealed class DockManager : IDisposable
         _application = application;
         _settings = AppSettings.Load();
         _settings.Language = UiText.NormalizeLanguage(_settings.Language);
+        SystemEvents.DisplaySettingsChanged += SystemEvents_DisplaySettingsChanged;
+        SystemEvents.UserPreferenceChanged += SystemEvents_UserPreferenceChanged;
     }
 
     public AppSettings Settings => _settings;
@@ -103,6 +113,19 @@ public sealed class DockManager : IDisposable
         {
             window.ShowFromManager();
         }
+    }
+
+    /// <summary>
+    /// 將全部卡片移回主螢幕可操作範圍，供螢幕配置改變後手動救援。
+    /// </summary>
+    public void RestoreAllWindowsToPrimary()
+    {
+        for (var index = 0; index < _windows.Count; index++)
+        {
+            _windows[index].RestoreToPrimaryScreen(index);
+        }
+
+        SaveSettings();
     }
 
     public void ExitApplication()
@@ -244,6 +267,7 @@ public sealed class DockManager : IDisposable
         _trayIcon.ContextMenuStrip?.Dispose();
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add(UiText.Get(_settings.Language, "ShowAll"), null, (_, _) => ShowAllWindows());
+        menu.Items.Add(UiText.Get(_settings.Language, "RestoreWindows"), null, (_, _) => RestoreAllWindowsToPrimary());
         menu.Items.Add(UiText.Get(_settings.Language, "HideAll"), null, (_, _) => HideAllWindows());
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(UiText.Get(_settings.Language, "Exit"), null, (_, _) => ExitApplication());
@@ -258,6 +282,8 @@ public sealed class DockManager : IDisposable
 
     public void Dispose()
     {
+        SystemEvents.DisplaySettingsChanged -= SystemEvents_DisplaySettingsChanged;
+        SystemEvents.UserPreferenceChanged -= SystemEvents_UserPreferenceChanged;
         if (_trayIcon is null)
         {
             return;
@@ -266,5 +292,27 @@ public sealed class DockManager : IDisposable
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         _trayIcon = null;
+    }
+
+    /// <summary>
+    /// 螢幕排列改變後，重新檢查卡片是否仍在可操作的工作區。
+    /// </summary>
+    private void SystemEvents_DisplaySettingsChanged(object? sender, EventArgs e)
+    {
+        _application.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+        {
+            for (var index = 0; index < _windows.Count; index++)
+            {
+                _windows[index].EnsureVisibleAfterDisplayChange(index);
+            }
+        }));
+    }
+
+    /// <summary>
+    /// Windows 外觀偏好改變時，更新選擇「跟隨 Windows」的卡片主題。
+    /// </summary>
+    private void SystemEvents_UserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
+    {
+        _application.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(RefreshAllWindows));
     }
 }

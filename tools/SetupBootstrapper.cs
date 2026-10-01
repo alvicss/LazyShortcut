@@ -12,7 +12,7 @@ internal static class SetupBootstrapper
     private const string ExeName = "LazyShortcut.exe";
     private const string LegacyExeName = "ProjectShortcutDock.exe";
     private const string UninstallExeName = "LazyShortcut.Uninstall.exe";
-    private const string CurrentVersion = "2.1";
+    private const string CurrentVersion = "2.2";
     private const string PublisherName = "alvicss";
     private const string StartMenuFolderName = "Lazy Shortcut";
     private const string LegacyStartMenuFolderName = "Project Shortcut Dock";

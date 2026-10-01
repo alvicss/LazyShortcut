@@ -1,3 +1,8 @@
+// =========================================================
+// 檔案：MainWindow.xaml.cs
+// 用途：處理捷徑卡片視窗的操作、外觀、排序及 Windows 整合。
+// 誰會用到：MainWindow.xaml 的事件由此檔案執行。
+// =========================================================
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
@@ -7,24 +12,44 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Forms = System.Windows.Forms;
 
 namespace ProjectShortcutDock;
 
 public partial class MainWindow : Window
 {
+    private const string ShortcutDragFormat = "ProjectShortcutDock.ShortcutItem";
     private const string DesktopWindowMode = "Desktop";
     private const string TopmostWindowMode = "Topmost";
     private const string DefaultTerminalShell = "cmd";
-    private static readonly IntPtr HwndBottom = new(1);
+    private const int WmNcHitTest = 0x0084;
+    private const int WmStyleChanging = 0x007C;
+    private const int GwlStyle = -16;
+    private const int GwlExStyle = -20;
+    private const int WsMaximizeBox = 0x00010000;
+    private const int WsExToolWindow = 0x00000080;
+    private const int WsExAppWindow = 0x00040000;
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoZOrder = 0x0004;
     private const uint SwpNoActivate = 0x0010;
+    private const uint SwpFrameChanged = 0x0020;
+    private const int HitTestLeft = 10;
+    private const int HitTestRight = 11;
+    private const int HitTestTop = 12;
+    private const int HitTestTopLeft = 13;
+    private const int HitTestTopRight = 14;
+    private const int HitTestBottom = 15;
+    private const int HitTestBottomLeft = 16;
+    private const int HitTestBottomRight = 17;
+    private const double ResizeEdgeSize = 8;
     private static readonly LanguageOption[] LanguageOptions =
     {
         new("zh-TW", "繁體中文"),
@@ -39,6 +64,8 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private bool _isLoading = true;
     private IntPtr _windowHandle;
+    private ShortcutItem? _draggedShortcut;
+    private Point _shortcutDragStartPoint;
 
     public MainWindow(DockManager manager, ShortcutGroup group)
     {
@@ -68,7 +95,7 @@ public partial class MainWindow : Window
         UpdateTitle();
         UpdateSubtitleVisibility();
         SetTitleEditing(false);
-        Opacity = 0.68;
+        Opacity = GetIdleOpacity();
 
         _isLoading = false;
     }
@@ -90,13 +117,14 @@ public partial class MainWindow : Window
     {
         Show();
         WindowState = WindowState.Normal;
+        EnsureWindowIsOnScreen();
         if (Topmost)
         {
             Activate();
         }
         else
         {
-            SendBehindOtherWindows();
+            PlaceBehindForegroundWindow();
         }
     }
 
@@ -122,8 +150,26 @@ public partial class MainWindow : Window
 
     private void ConfigureSettingsControls()
     {
-        ThemeBox.ItemsSource = ThemePalette.Names;
-        ThemeBox.SelectedItem = _settings.Theme;
+        ThemeBox.ItemsSource = new[]
+        {
+            new AppearanceOption(ThemePalette.Minimal, GetText("ThemeMinimal")),
+            new AppearanceOption(ThemePalette.Glass, GetText("ThemeGlass")),
+            new AppearanceOption(ThemePalette.Terminal, GetText("ThemeTerminal")),
+            new AppearanceOption(ThemePalette.Neon, GetText("ThemeNeon"))
+        };
+        ThemeBox.DisplayMemberPath = nameof(AppearanceOption.DisplayName);
+        ThemeBox.SelectedValuePath = nameof(AppearanceOption.Code);
+        ThemeBox.SelectedValue = ThemePalette.NormalizeTheme(_settings.Theme);
+        ColorSchemeBox.ItemsSource = new[]
+        {
+            new AppearanceOption(ThemePalette.Auto, GetText("SchemeAuto")),
+            new AppearanceOption(ThemePalette.Light, GetText("SchemeLight")),
+            new AppearanceOption(ThemePalette.DarkScheme, GetText("SchemeDark"))
+        };
+        ColorSchemeBox.DisplayMemberPath = nameof(AppearanceOption.DisplayName);
+        ColorSchemeBox.SelectedValuePath = nameof(AppearanceOption.Code);
+        ColorSchemeBox.SelectedValue = ThemePalette.NormalizeColorScheme(_settings.ColorScheme);
+        ColorSchemeBox.IsEnabled = _settings.Theme != ThemePalette.Neon;
         WindowModeBox.ItemsSource = new[] { DesktopWindowMode, TopmostWindowMode };
         WindowModeBox.SelectedItem = NormalizeWindowMode(_settings.WindowMode);
         LanguageBox.ItemsSource = LanguageOptions;
@@ -149,9 +195,96 @@ public partial class MainWindow : Window
             return;
         }
 
+        MoveToDefaultPosition(0);
+    }
+
+    /// <summary>
+    /// 把卡片放到主螢幕右上角（程式的預設位置）。
+    /// cascadeIndex：錯開的格數，0 = 不錯開；每多 1 格就往左下多偏移一點，避免多張卡片完全疊在一起。
+    /// </summary>
+    private void MoveToDefaultPosition(int cascadeIndex)
+    {
         var workArea = SystemParameters.WorkArea;
-        Left = workArea.Right - Width - 18;
-        Top = workArea.Top + 18;
+        var offset = DockManager.CascadeOffset * cascadeIndex;
+
+        // 往左下錯開；卡片很多或螢幕較小時，仍限制在主螢幕工作區內。
+        var maximumLeft = Math.Max(workArea.Left, workArea.Right - Width);
+        var maximumTop = Math.Max(workArea.Top, workArea.Bottom - Height);
+        Left = Math.Clamp(workArea.Right - Width - 18 - offset, workArea.Left, maximumLeft);
+        Top = Math.Clamp(workArea.Top + 18 + offset, workArea.Top, maximumTop);
+    }
+
+    /// <summary>
+    /// 檢查卡片是否還在某個螢幕上看得到；看不到就移回主螢幕右上角，並把新位置存進設定檔。
+    /// 會發生的情境：換了螢幕、拔掉外接螢幕、或螢幕排列被改掉（例如顯示卡驅動更新後重置），
+    /// 設定檔裡存的舊座標剛好落在「沒有任何螢幕」的區域，卡片就會開著但看不到。
+    /// </summary>
+    private void EnsureWindowIsOnScreen()
+    {
+        if (IsTitleBarOnAnyScreen())
+        {
+            return;
+        }
+
+        // 依群組順序錯開，多張卡片同時被拉回來時才不會疊在同一個位置
+        var cascadeIndex = Math.Max(0, _settings.Groups.IndexOf(_group));
+        MoveToDefaultPosition(cascadeIndex);
+
+        // 確保新位置寫回設定檔，下次開啟就直接用新位置
+        PersistWindowBounds();
+    }
+
+    /// <summary>
+    /// 螢幕排列改變後檢查卡片；若標題列已離開所有螢幕，就按群組順序移回主螢幕。
+    /// </summary>
+    internal void EnsureVisibleAfterDisplayChange(int groupIndex)
+    {
+        if (!IsVisible || IsTitleBarOnAnyScreen())
+        {
+            return;
+        }
+
+        MoveToDefaultPosition(groupIndex);
+        PersistWindowBounds();
+    }
+
+    /// <summary>
+    /// 從系統匣救援單張卡片：顯示視窗並移到主螢幕可操作範圍。
+    /// </summary>
+    internal void RestoreToPrimaryScreen(int groupIndex)
+    {
+        MoveToDefaultPosition(groupIndex);
+        Show();
+        WindowState = WindowState.Normal;
+        PersistWindowBounds();
+    }
+
+    /// <summary>
+    /// 判斷「標題列正中間」那一點，有沒有落在任何一個螢幕的工作區（扣掉工作列的範圍）內。
+    /// 這一點看得到，代表標題列至少有一半在畫面上，使用者抓得到、拖得動。
+    /// 回傳：true = 看得到；false = 不在任何螢幕上。
+    /// </summary>
+    private bool IsTitleBarOnAnyScreen()
+    {
+        // 取標題列正中間的點，換算成螢幕像素座標。
+        // 不直接用 WPF 的 Left/Top：多螢幕縮放比例不同時，WPF 的單位和螢幕像素會對不起來；
+        // PointToScreen 和 Screen 都是向 Windows 查的像素，單位一定一致。
+        var titleBarCenter = new Point(TitleBar.ActualWidth / 2, TitleBar.ActualHeight / 2);
+        var pointOnScreen = TitleBar.PointToScreen(titleBarCenter);
+        var pixelX = (int)Math.Round(pointOnScreen.X);
+        var pixelY = (int)Math.Round(pointOnScreen.Y);
+
+        // 逐一比對每個螢幕。不能只看「所有螢幕合起來的外框」，
+        // 因為兩個螢幕中間可能有空白區，落在那裡一樣看不到。
+        foreach (var screen in Forms.Screen.AllScreens)
+        {
+            if (screen.WorkingArea.Contains(pixelX, pixelY))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void ApplyLanguage()
@@ -168,33 +301,107 @@ public partial class MainWindow : Window
         WindowModeLabel.Text = GetText("WindowMode");
         LanguageLabel.Text = GetText("Language");
         TerminalShellLabel.Text = GetText("TerminalShell");
+        ColorSchemeLabel.Text = GetText("ColorScheme");
         StartWithWindowsBox.Content = GetText("StartWithWindows");
+        ThemePreviewTitle.Text = GetText("ThemePreview");
+        ThemePreviewDetail.Text = GetText("ThemePreviewDetail");
     }
 
     private void ApplyTheme(string themeName)
     {
-        var palette = ThemePalette.For(themeName);
+        var palette = ThemePalette.For(themeName, _settings.ColorScheme);
+        var normalizedTheme = ThemePalette.NormalizeTheme(themeName);
         Resources["WindowBrush"] = CreateBrush(palette.Window);
         Resources["PanelBrush"] = CreateBrush(palette.Panel);
         Resources["TextBrush"] = CreateBrush(palette.Text);
         Resources["SubtleTextBrush"] = CreateBrush(palette.SubtleText);
         Resources["BorderBrush"] = CreateBrush(palette.Border);
         Resources["HoverBrush"] = CreateBrush(palette.Hover);
+        Resources["ShortcutRowBorderThickness"] = normalizedTheme == ThemePalette.Terminal
+            ? new Thickness(0, 0, 0, 1)
+            : new Thickness(0);
         ShellShadow.Color = palette.Shadow;
         ShellShadow.Opacity = palette.ShadowOpacity;
+        ShellShadow.BlurRadius = normalizedTheme == ThemePalette.Glass ? 32 : 24;
+        ShellShadow.ShadowDepth = normalizedTheme == ThemePalette.Glass ? 6 : 3;
+        ShellBorder.CornerRadius = new CornerRadius(palette.CornerRadius);
+        SettingsPanel.CornerRadius = new CornerRadius(Math.Max(3, palette.CornerRadius - 3));
+        ThemePreviewBorder.CornerRadius = new CornerRadius(Math.Max(3, palette.CornerRadius - 3));
+        FontFamily = new FontFamily(palette.FontFamily);
+        TerminalPromptText.Visibility = normalizedTheme == ThemePalette.Terminal ? Visibility.Visible : Visibility.Collapsed;
+        UpdateTitleEditorVisibility();
+        TerminalScanlines.Visibility = normalizedTheme == ThemePalette.Terminal ? Visibility.Visible : Visibility.Collapsed;
+        TerminalScanlines.Fill = CreateScanlineBrush(palette);
+        Opacity = IsMouseOver ? 1 : GetIdleOpacity();
         ApplyGroupAccent();
+    }
+
+    /// <summary>依主題設定滑鼠離開後的透明度；玻璃使用自身半透明底，簡約維持實色。</summary>
+    private double GetIdleOpacity()
+    {
+        var theme = ThemePalette.NormalizeTheme(_settings.Theme);
+        return theme == ThemePalette.Terminal || theme == ThemePalette.Neon ? 0.94 : 1;
+    }
+
+    /// <summary>混合群組色時保留原本的透明度，避免玻璃背景意外變成實色。</summary>
+    private static Color BlendPreservingAlpha(Color baseColor, Color accentColor, double weight)
+    {
+        var blended = CardColorPalette.Blend(baseColor, accentColor, weight);
+        return Color.FromArgb(baseColor.A, blended.R, blended.G, blended.B);
+    }
+
+    /// <summary>為玻璃加入柔和反光，為終端機加入低對比漸層。</summary>
+    private static Brush CreateCardBackground(string themeName, Color baseColor, Color panelColor)
+    {
+        var theme = ThemePalette.NormalizeTheme(themeName);
+        if (theme != ThemePalette.Glass && theme != ThemePalette.Terminal)
+        {
+            return CreateBrush(baseColor);
+        }
+
+        var highlightWeight = theme == ThemePalette.Glass ? 0.14 : 0.32;
+        var highlightColor = theme == ThemePalette.Glass ? Colors.White : panelColor;
+        var topColor = BlendPreservingAlpha(baseColor, highlightColor, highlightWeight);
+        var gradient = new LinearGradientBrush(topColor, baseColor, new Point(0, 0), new Point(1, 1));
+        gradient.Freeze();
+        return gradient;
+    }
+
+    /// <summary>建立終端機背景的細掃描線；線條不接收滑鼠事件。</summary>
+    private static Brush CreateScanlineBrush(ThemePalette palette)
+    {
+        var isDark = palette.Window.R < 100;
+        var lineColor = isDark ? Color.FromArgb(8, 255, 255, 255) : Color.FromArgb(7, 0, 0, 0);
+        var line = new GeometryDrawing(CreateBrush(lineColor), null, new RectangleGeometry(new Rect(0, 0, 4, 1)));
+        var brush = new DrawingBrush(line)
+        {
+            TileMode = TileMode.Tile,
+            Viewport = new Rect(0, 0, 4, 4),
+            ViewportUnits = BrushMappingMode.Absolute,
+            Viewbox = new Rect(0, 0, 4, 4),
+            ViewboxUnits = BrushMappingMode.Absolute,
+            Stretch = Stretch.Fill
+        };
+        brush.Freeze();
+        return brush;
     }
 
     private void ApplyGroupAccent()
     {
-        var theme = ThemePalette.For(_settings.Theme);
+        var theme = ThemePalette.For(_settings.Theme, _settings.ColorScheme);
         var accent = _group.GetAccentColor();
         var accentWeight = CardColorPalette.GetAlphaWeight(accent);
-        ShellBorder.BorderBrush = CreateBrush(accent);
-        ShellBorder.Background = CreateBrush(CardColorPalette.Blend(theme.Window, CardColorPalette.WithoutAlpha(accent), 0.10 * accentWeight));
-        SettingsPanel.BorderBrush = CreateBrush(CardColorPalette.Blend(theme.Border, CardColorPalette.WithoutAlpha(accent), 0.30 * accentWeight));
-        SettingsPanel.Background = CreateBrush(CardColorPalette.Blend(theme.Panel, CardColorPalette.WithoutAlpha(accent), 0.06 * accentWeight));
         var visibleAccent = CardColorPalette.WithoutAlpha(accent);
+        var themeName = ThemePalette.NormalizeTheme(_settings.Theme);
+        var borderWeight = themeName == ThemePalette.Neon ? 0.7 : 0.14;
+        var borderColor = BlendPreservingAlpha(theme.Border, visibleAccent, borderWeight * accentWeight);
+        var backgroundColor = BlendPreservingAlpha(theme.Window, visibleAccent, 0.10 * accentWeight);
+        var settingsBorder = BlendPreservingAlpha(theme.Border, visibleAccent, 0.30 * accentWeight);
+        var settingsBackground = BlendPreservingAlpha(theme.Panel, visibleAccent, 0.06 * accentWeight);
+        ShellBorder.BorderBrush = CreateBrush(borderColor);
+        ShellBorder.Background = CreateCardBackground(themeName, backgroundColor, theme.Panel);
+        SettingsPanel.BorderBrush = CreateBrush(settingsBorder);
+        SettingsPanel.Background = CreateBrush(settingsBackground);
         ColorIndicatorFill.Fill = CreateBrush(accent);
         ColorIndicatorFill.Stroke = CreateBrush(visibleAccent);
         ColorIndicatorOutline.Stroke = CreateBrush(visibleAccent);
@@ -205,10 +412,9 @@ public partial class MainWindow : Window
     {
         _settings.WindowMode = NormalizeWindowMode(_settings.WindowMode);
         Topmost = _settings.WindowMode == TopmostWindowMode;
-
         if (!Topmost)
         {
-            SendBehindOtherWindows();
+            PlaceBehindForegroundWindow();
         }
     }
 
@@ -217,6 +423,7 @@ public partial class MainWindow : Window
         Title = string.IsNullOrWhiteSpace(_group.Name)
             ? GetDefaultGroupName()
             : _group.Name;
+        TerminalPromptText.Text = $"~/shortcut-dock $ ls \"{Title}\"";
     }
 
     private void UpdateSubtitleVisibility()
@@ -260,6 +467,16 @@ public partial class MainWindow : Window
     {
         GroupNameBox.IsReadOnly = !isEditing;
         GroupNameBox.Cursor = isEditing ? Cursors.IBeam : Cursors.SizeAll;
+        UpdateTitleEditorVisibility();
+    }
+
+    /// <summary>Terminal 平時只顯示命令提示列；按鉛筆改名時才顯示群組名稱輸入框。</summary>
+    private void UpdateTitleEditorVisibility()
+    {
+        var isTerminal = ThemePalette.NormalizeTheme(_settings.Theme) == ThemePalette.Terminal;
+        GroupNameBox.Visibility = isTerminal && GroupNameBox.IsReadOnly
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private void AddShortcuts(string[] paths)
@@ -297,6 +514,65 @@ public partial class MainWindow : Window
         _manager.SaveSettings();
     }
 
+    /// <summary>
+    /// 將捷徑在目前卡片內移動指定格數，並立即保存新的顯示順序。
+    /// </summary>
+    private void MoveShortcut(ShortcutItem item, int offset)
+    {
+        var currentIndex = _group.Shortcuts.IndexOf(item);
+        var targetIndex = currentIndex + offset;
+        if (currentIndex < 0 || targetIndex < 0 || targetIndex >= _group.Shortcuts.Count)
+        {
+            return;
+        }
+
+        _group.Shortcuts.Move(currentIndex, targetIndex);
+        ShortcutList.SelectedItem = item;
+        _manager.SaveSettings();
+    }
+
+    /// <summary>
+    /// 依滑鼠放下位置，把拖曳中的捷徑插入目標項目之前或之後。
+    /// </summary>
+    private void ReorderShortcutAt(Point dropPoint, ShortcutItem draggedItem)
+    {
+        var targetContainer = ItemsControl.ContainerFromElement(
+            ShortcutList,
+            ShortcutList.InputHitTest(dropPoint) as DependencyObject) as ListBoxItem;
+        var originalIndex = _group.Shortcuts.IndexOf(draggedItem);
+        if (originalIndex < 0)
+        {
+            return;
+        }
+
+        var targetIndex = _group.Shortcuts.Count;
+        if (targetContainer?.DataContext is ShortcutItem targetItem)
+        {
+            targetIndex = _group.Shortcuts.IndexOf(targetItem);
+            var itemPoint = dropPoint;
+            var itemTopLeft = targetContainer.TranslatePoint(new Point(0, 0), ShortcutList);
+            if (itemPoint.Y > itemTopLeft.Y + targetContainer.ActualHeight / 2)
+            {
+                targetIndex++;
+            }
+        }
+
+        if (targetIndex > originalIndex)
+        {
+            targetIndex--;
+        }
+
+        targetIndex = Math.Clamp(targetIndex, 0, _group.Shortcuts.Count - 1);
+        if (targetIndex == originalIndex)
+        {
+            return;
+        }
+
+        _group.Shortcuts.Move(originalIndex, targetIndex);
+        ShortcutList.SelectedItem = draggedItem;
+        _manager.SaveSettings();
+    }
+
     private void OpenPath(string path)
     {
         if (!ShortcutPathExists(path))
@@ -330,19 +606,6 @@ public partial class MainWindow : Window
         var shell = _terminalShellOptions.FirstOrDefault(x => x.Code == NormalizeTerminalShell(_settings.TerminalShell))
             ?? _terminalShellOptions.First(x => x.Code == DefaultTerminalShell);
         Process.Start(CreateTerminalStartInfo(shell, workingDirectory, command));
-    }
-
-    private void SendBehindOtherWindows()
-    {
-        if (NormalizeWindowMode(_settings.WindowMode) == TopmostWindowMode)
-        {
-            return;
-        }
-
-        if (_windowHandle != IntPtr.Zero)
-        {
-            SetWindowPos(_windowHandle, HwndBottom, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
-        }
     }
 
     private void SetStartWithWindows(bool enabled)
@@ -554,8 +817,18 @@ public partial class MainWindow : Window
     private ContextMenu CreateShortcutContextMenu()
     {
         var menu = new ContextMenu();
+        var selected = ShortcutList.SelectedItem as ShortcutItem;
+        var selectedIndex = selected is null ? -1 : _group.Shortcuts.IndexOf(selected);
+        var moveUpItem = CreateMenuItem(GetText("MoveUp"), "\uE74A", MoveShortcutUpMenuItem_Click);
+        moveUpItem.IsEnabled = selectedIndex > 0;
+        menu.Items.Add(moveUpItem);
+        var moveDownItem = CreateMenuItem(GetText("MoveDown"), "\uE74B", MoveShortcutDownMenuItem_Click);
+        moveDownItem.IsEnabled = selectedIndex >= 0 && selectedIndex < _group.Shortcuts.Count - 1;
+        menu.Items.Add(moveDownItem);
+        menu.Items.Add(new Separator());
         menu.Items.Add(CreateMenuItem(GetText("Open"), "\uE8E5", OpenMenuItem_Click));
         menu.Items.Add(CreateMenuItem(GetText("OpenParent"), "\uE838", OpenParentMenuItem_Click));
+        menu.Items.Add(CreateMenuItem(GetText("CopyItem"), "\uE8C8", CopyItemMenuItem_Click));
         menu.Items.Add(CreateMenuItem(GetText("CopyPath"), "\uE8C8", CopyPathMenuItem_Click));
         menu.Items.Add(new Separator());
         menu.Items.Add(CreateMenuItem(GetText("OpenTerminal"), "\uE756", OpenTerminalMenuItem_Click));
@@ -699,7 +972,7 @@ public partial class MainWindow : Window
     private void ColorButton_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new ColorPickerWindow(this, _group.GetAccentColor());
-        if (dialog.ShowDialog() != false)
+        if (dialog.ShowDialog() == true)
         {
             _group.SetAccentColor(dialog.SelectedColor);
         }
@@ -784,17 +1057,209 @@ public partial class MainWindow : Window
 
     private void Window_MouseEnter(object sender, MouseEventArgs e) => Opacity = 1;
 
-    private void Window_MouseLeave(object sender, MouseEventArgs e) => Opacity = 0.68;
+    private void Window_MouseLeave(object sender, MouseEventArgs e) => Opacity = GetIdleOpacity();
 
     private void Window_SourceInitialized(object? sender, EventArgs e)
     {
         _windowHandle = new WindowInteropHelper(this).Handle;
+        if (HwndSource.FromHwnd(_windowHandle) is HwndSource source)
+        {
+            source.AddHook(Window_HwndSourceHook);
+        }
+
+        ApplyToolWindowStyle();
         ApplyWindowMode();
+    }
+
+    /// <summary>
+    /// 把卡片視窗設成「工具視窗」，讓它不出現在 Alt+Tab 清單，並拿掉最大化能力。
+    /// 為什麼：ShowInTaskbar=False 只拿掉工作列按鈕，Alt+Tab 仍看得到；
+    /// 而一般程式視窗被拖到螢幕邊緣時，Windows 會套用靠左／靠右（Snap）把它放大。
+    /// 工具視窗＋不可最大化，Windows 就不會對它做這些處理（與 ai_usage-board 同一做法）。
+    /// </summary>
+    private void ApplyToolWindowStyle()
+    {
+        if (_windowHandle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var oldStyle = GetWindowLong(_windowHandle, GwlStyle);
+        var oldExStyle = GetWindowLong(_windowHandle, GwlExStyle);
+        var newStyle = RemoveMaximizeBox(oldStyle);
+        var newExStyle = AddToolWindowExStyle(oldExStyle);
+        if (newStyle == oldStyle && newExStyle == oldExStyle)
+        {
+            return;
+        }
+
+        SetWindowLong(_windowHandle, GwlStyle, newStyle);
+        SetWindowLong(_windowHandle, GwlExStyle, newExStyle);
+
+        // 樣式改變後要通知 Windows 重新套用（不移動、不改大小、不改前後順序、不搶焦點）
+        SetWindowPos(
+            _windowHandle,
+            IntPtr.Zero,
+            0,
+            0,
+            0,
+            0,
+            SwpNoMove | SwpNoSize | SwpNoZOrder | SwpNoActivate | SwpFrameChanged);
+    }
+
+    /// <summary>拿掉「可最大化」旗標，避免拖到螢幕上緣時被最大化。</summary>
+    private static int RemoveMaximizeBox(int style) => style & ~WsMaximizeBox;
+
+    /// <summary>加上「工具視窗」、拿掉「應用程式視窗」，讓視窗不出現在 Alt+Tab。</summary>
+    private static int AddToolWindowExStyle(int exStyle) => (exStyle | WsExToolWindow) & ~WsExAppWindow;
+
+    /// <summary>
+    /// WPF 之後若因其他屬性變動而重寫視窗樣式，會把工具視窗旗標蓋掉；
+    /// 在 Windows 套用新樣式之前（WM_STYLECHANGING）把旗標補回去，確保一直維持。
+    /// </summary>
+    private static void KeepToolWindowStyle(IntPtr wParam, IntPtr lParam)
+    {
+        var styleKind = wParam.ToInt32();
+        var styleChange = Marshal.PtrToStructure<StyleStruct>(lParam);
+        var correctedStyle = styleChange.StyleNew;
+
+        if (styleKind == GwlStyle)
+        {
+            correctedStyle = RemoveMaximizeBox(styleChange.StyleNew);
+        }
+        else if (styleKind == GwlExStyle)
+        {
+            correctedStyle = AddToolWindowExStyle(styleChange.StyleNew);
+        }
+
+        if (correctedStyle != styleChange.StyleNew)
+        {
+            styleChange.StyleNew = correctedStyle;
+            Marshal.StructureToPtr(styleChange, lParam, false);
+        }
+    }
+
+    /// <summary>
+    /// 視窗訊息 hook：
+    /// 1. WM_STYLECHANGING：維持工具視窗樣式（不上 Alt+Tab、不被 Snap 放大）。
+    /// 2. WM_NCHITTEST：將視窗外緣與四角的滑鼠命中位置交給 Windows，讓無框視窗使用原生尺寸調整行為。
+    /// </summary>
+    private IntPtr Window_HwndSourceHook(
+        IntPtr hwnd,
+        int message,
+        IntPtr wParam,
+        IntPtr lParam,
+        ref bool handled)
+    {
+        if (message == WmStyleChanging)
+        {
+            // 只修正即將套用的值，不設 handled，讓 Windows 照常完成樣式變更
+            KeepToolWindowStyle(wParam, lParam);
+            return IntPtr.Zero;
+        }
+
+        if (message != WmNcHitTest || WindowState != WindowState.Normal || ResizeMode == ResizeMode.NoResize)
+        {
+            return IntPtr.Zero;
+        }
+
+        if (!GetWindowRect(hwnd, out var windowRect))
+        {
+            return IntPtr.Zero;
+        }
+
+        var screenPoint = lParam.ToInt64();
+        var pointerX = unchecked((short)(screenPoint & 0xFFFF));
+        var pointerY = unchecked((short)((screenPoint >> 16) & 0xFFFF));
+        var resizeEdge = ResizeEdgeSize * VisualTreeHelper.GetDpi(this).DpiScaleX;
+        var nearLeft = pointerX < windowRect.Left + resizeEdge;
+        var nearRight = pointerX >= windowRect.Right - resizeEdge;
+        var nearTop = pointerY < windowRect.Top + resizeEdge;
+        var nearBottom = pointerY >= windowRect.Bottom - resizeEdge;
+
+        var hitTest = 0;
+        if (nearTop && nearLeft)
+        {
+            hitTest = HitTestTopLeft;
+        }
+        else if (nearTop && nearRight)
+        {
+            hitTest = HitTestTopRight;
+        }
+        else if (nearBottom && nearLeft)
+        {
+            hitTest = HitTestBottomLeft;
+        }
+        else if (nearBottom && nearRight)
+        {
+            hitTest = HitTestBottomRight;
+        }
+        else if (nearLeft)
+        {
+            hitTest = HitTestLeft;
+        }
+        else if (nearRight)
+        {
+            hitTest = HitTestRight;
+        }
+        else if (nearTop)
+        {
+            hitTest = HitTestTop;
+        }
+        else if (nearBottom)
+        {
+            hitTest = HitTestBottom;
+        }
+
+        if (hitTest == 0)
+        {
+            return IntPtr.Zero;
+        }
+
+        handled = true;
+        return new IntPtr(hitTest);
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        SendBehindOtherWindows();
+        // Loaded 時版面已排好，才量得到標題列的位置
+        EnsureWindowIsOnScreen();
+        PlaceBehindForegroundWindow();
+    }
+
+    /// <summary>
+    /// Desktop 模式放在目前一般程式視窗後方、桌面圖層前方，避免卡片遮住工作內容或被桌面蓋住。
+    /// </summary>
+    private void PlaceBehindForegroundWindow()
+    {
+        if (Topmost || _windowHandle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var foregroundWindow = GetForegroundWindow();
+        if (foregroundWindow == IntPtr.Zero || foregroundWindow == _windowHandle)
+        {
+            return;
+        }
+
+        var className = new StringBuilder(128);
+        GetClassName(foregroundWindow, className, className.Capacity);
+        var foregroundClass = className.ToString();
+        if (foregroundClass is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd")
+        {
+            // 目前前景是桌面或工作列，卡片已在桌面上方，不要再壓到它們後面。
+            return;
+        }
+
+        SetWindowPos(
+            _windowHandle,
+            foregroundWindow,
+            0,
+            0,
+            0,
+            0,
+            SwpNoMove | SwpNoSize | SwpNoActivate);
     }
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -820,8 +1285,24 @@ public partial class MainWindow : Window
 
     private void Window_DragEnter(object sender, DragEventArgs e)
     {
-        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+        if (e.Data.GetDataPresent(ShortcutDragFormat))
+        {
+            e.Effects = DragDropEffects.Move;
+        }
+        else
+        {
+            e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+        }
+
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// Desktop 模式失去焦點後，將卡片放到新前景程式後方，仍保留在桌面圖層上方。
+    /// </summary>
+    private void Window_Deactivated(object? sender, EventArgs e)
+    {
+        PlaceBehindForegroundWindow();
     }
 
     private void Window_Drop(object sender, DragEventArgs e)
@@ -873,6 +1354,79 @@ public partial class MainWindow : Window
         item.IsSelected = true;
     }
 
+    /// <summary>
+    /// 記錄清單內拖曳的起點與來源捷徑。
+    /// </summary>
+    private void ShortcutList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var item = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+        _draggedShortcut = item?.DataContext as ShortcutItem;
+        _shortcutDragStartPoint = e.GetPosition(ShortcutList);
+    }
+
+    /// <summary>
+    /// 滑鼠移動超過 Windows 拖曳門檻後，開始同一清單內的捷徑排序拖曳。
+    /// </summary>
+    private void ShortcutList_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || _draggedShortcut is null)
+        {
+            return;
+        }
+
+        var currentPoint = e.GetPosition(ShortcutList);
+        var movedEnough = Math.Abs(currentPoint.X - _shortcutDragStartPoint.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+                          Math.Abs(currentPoint.Y - _shortcutDragStartPoint.Y) >= SystemParameters.MinimumVerticalDragDistance;
+        if (!movedEnough)
+        {
+            return;
+        }
+
+        var data = new DataObject(ShortcutDragFormat, _draggedShortcut);
+        DragDrop.DoDragDrop(ShortcutList, data, DragDropEffects.Move);
+        _draggedShortcut = null;
+    }
+
+    /// <summary>
+    /// 根據拖放內容顯示排序或新增捷徑的正確游標提示。
+    /// </summary>
+    private void ShortcutList_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent(ShortcutDragFormat))
+        {
+            e.Effects = DragDropEffects.Move;
+        }
+        else if (e.Data.GetDataPresent(DataFormats.FileDrop))
+        {
+            e.Effects = DragDropEffects.Copy;
+        }
+        else
+        {
+            e.Effects = DragDropEffects.None;
+        }
+
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 處理清單內排序，或把檔案總管拖入的檔案與資料夾加入清單。
+    /// </summary>
+    private void ShortcutList_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(ShortcutDragFormat) is ShortcutItem draggedItem)
+        {
+            ReorderShortcutAt(e.GetPosition(ShortcutList), draggedItem);
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Data.GetData(DataFormats.FileDrop) is string[] paths)
+        {
+            AddShortcuts(paths);
+            e.Handled = true;
+        }
+    }
+
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ClickCount == 2)
@@ -902,6 +1456,7 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>保存新的主題風格並立即套用到所有卡片。</summary>
     private void ThemeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_isLoading)
@@ -909,10 +1464,28 @@ public partial class MainWindow : Window
             return;
         }
 
-        var themeName = ThemeBox.SelectedItem?.ToString();
+        var themeName = ThemeBox.SelectedValue?.ToString();
         if (!string.IsNullOrWhiteSpace(themeName))
         {
-            _settings.Theme = themeName;
+            _settings.Theme = ThemePalette.NormalizeTheme(themeName);
+            ColorSchemeBox.IsEnabled = _settings.Theme != ThemePalette.Neon;
+            _manager.RefreshAllWindows();
+            _manager.SaveSettings();
+        }
+    }
+
+    /// <summary>保存亮暗色系選擇並立即套用到所有卡片。</summary>
+    private void ColorSchemeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isLoading)
+        {
+            return;
+        }
+
+        var colorScheme = ColorSchemeBox.SelectedValue?.ToString();
+        if (!string.IsNullOrWhiteSpace(colorScheme))
+        {
+            _settings.ColorScheme = ThemePalette.NormalizeColorScheme(colorScheme);
             _manager.RefreshAllWindows();
             _manager.SaveSettings();
         }
@@ -962,16 +1535,92 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>將目前捷徑往清單前方移一格。</summary>
+    private void MoveShortcutUpMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (ItemFromSender(sender) is ShortcutItem item)
+        {
+            MoveShortcut(item, -1);
+        }
+    }
+
+    /// <summary>將目前捷徑往清單後方移一格。</summary>
+    private void MoveShortcutDownMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (ItemFromSender(sender) is ShortcutItem item)
+        {
+            MoveShortcut(item, 1);
+        }
+    }
+
     private void OpenParentMenuItem_Click(object sender, RoutedEventArgs e)
     {
         if (ItemFromSender(sender) is ShortcutItem item)
         {
-            var parent = Directory.GetParent(item.Path)?.FullName;
-            if (parent is not null)
-            {
-                OpenPath(parent);
-            }
+            RevealPathInExplorer(item.Path);
         }
+    }
+
+    /// <summary>把右鍵選中的實體檔案或資料夾放進 Windows 剪貼簿。</summary>
+    private void CopyItemMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (ItemFromSender(sender) is ShortcutItem item)
+        {
+            CopyItemToClipboard(item.Path);
+        }
+    }
+
+    /// <summary>
+    /// 將實體檔案或資料夾放進 Windows 剪貼簿，讓檔案總管負責後續完整複製。
+    /// </summary>
+    private void CopyItemToClipboard(string path)
+    {
+        if (!ShortcutPathExists(path))
+        {
+            MessageBox.Show(GetText("ItemMissing"), GetText("AppTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        try
+        {
+            var fileDropList = new System.Collections.Specialized.StringCollection();
+            fileDropList.Add(path);
+
+            var clipboardData = new DataObject();
+            clipboardData.SetFileDropList(fileDropList);
+
+            // Windows 檔案總管會依這個旗標在貼上時複製，而不是移動來源項目。
+            var copyEffect = new MemoryStream(BitConverter.GetBytes(1));
+            clipboardData.SetData("Preferred DropEffect", copyEffect);
+            Clipboard.SetDataObject(clipboardData, true);
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(
+                string.Format(GetText("CopyItemFailed"), exception.Message),
+                GetText("AppTitle"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// 開啟檔案總管並反白選中指定檔案或資料夾。
+    /// </summary>
+    private void RevealPathInExplorer(string path)
+    {
+        if (!ShortcutPathExists(path))
+        {
+            MessageBox.Show(GetText("ItemMissing"), GetText("AppTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = $"/select,\"{path}\"",
+            UseShellExecute = true
+        });
     }
 
     private void CopyPathMenuItem_Click(object sender, RoutedEventArgs e)
@@ -1055,7 +1704,42 @@ public partial class MainWindow : Window
 
     private sealed record LanguageOption(string Code, string DisplayName);
 
+    private sealed record AppearanceOption(string Code, string DisplayName);
+
     private sealed record ShellOption(string Code, string DisplayName, string ExecutablePath);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    /// <summary>WM_STYLECHANGING 帶來的樣式資料：變更前與即將套用的樣式值。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct StyleStruct
+    {
+        public int StyleOld;
+        public int StyleNew;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rectangle);
+
+    // 視窗樣式只用到低 32 位元，32／64 位元程式都可用 GetWindowLong／SetWindowLong
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+    private static extern int GetWindowLong(IntPtr hWnd, int index);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW")]
+    private static extern int SetWindowLong(IntPtr hWnd, int index, int newLong);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
 
     [DllImport("user32.dll")]
     private static extern bool SetWindowPos(
@@ -1065,5 +1749,5 @@ public partial class MainWindow : Window
         int y,
         int cx,
         int cy,
-        uint uFlags);
+        uint flags);
 }

@@ -1,15 +1,18 @@
+<!-- 檔案：ColorPickerWindow.xaml；用途：定義卡片顏色、色相、RGB 與透明度的選色畫面。 -->
 <Window x:Class="ProjectShortcutDock.ColorPickerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Card color"
-        Width="320"
-        Height="280"
-        MinWidth="320"
-        MinHeight="280"
+        Width="285"
+        MinWidth="285"
+        SizeToContent="Height"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
         Closing="Window_Closing"
+        LostMouseCapture="Window_LostMouseCapture"
+        PreviewMouseLeftButtonDown="Window_PreviewMouseLeftButtonDown"
+        PreviewKeyDown="Window_PreviewKeyDown"
         Background="{DynamicResource WindowBrush}">
     <Window.Resources>
         <DrawingBrush x:Key="CheckerBrush"
@@ -34,6 +37,29 @@
                 </DrawingGroup>
             </DrawingBrush.Drawing>
         </DrawingBrush>
+        <LinearGradientBrush x:Key="WhiteOverlayBrush"
+                             StartPoint="0,0"
+                             EndPoint="1,0">
+            <GradientStop Color="White" Offset="0" />
+            <GradientStop Color="#00FFFFFF" Offset="1" />
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="BlackOverlayBrush"
+                             StartPoint="0,0"
+                             EndPoint="0,1">
+            <GradientStop Color="#00000000" Offset="0" />
+            <GradientStop Color="Black" Offset="1" />
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="HueStripBrush"
+                             StartPoint="0,0"
+                             EndPoint="1,0">
+            <GradientStop Color="Red" Offset="0" />
+            <GradientStop Color="Yellow" Offset="0.1667" />
+            <GradientStop Color="Lime" Offset="0.3333" />
+            <GradientStop Color="Cyan" Offset="0.5" />
+            <GradientStop Color="Blue" Offset="0.6667" />
+            <GradientStop Color="Magenta" Offset="0.8333" />
+            <GradientStop Color="Red" Offset="1" />
+        </LinearGradientBrush>
     </Window.Resources>
 
     <Border Margin="10"
@@ -44,7 +70,7 @@
             Background="{DynamicResource WindowBrush}">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
+                <RowDefinition Height="110" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -53,118 +79,174 @@
             </Grid.RowDefinitions>
 
             <Border Grid.Row="0"
-                    Background="{StaticResource CheckerBrush}"
                     CornerRadius="8"
                     BorderThickness="1"
                     BorderBrush="{DynamicResource BorderBrush}"
-                    Padding="8">
-                <Grid>
-                    <Border x:Name="PreviewSwatch"
-                            Height="40"
-                            CornerRadius="6"
-                            BorderThickness="1" />
-                    <TextBlock x:Name="HexValueText"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextBrush}" />
+                    ClipToBounds="True">
+                <Grid x:Name="ColorField"
+                      Background="Red"
+                      SizeChanged="ColorField_SizeChanged"
+                      MouseLeftButtonDown="ColorField_MouseLeftButtonDown"
+                      MouseMove="ColorField_MouseMove"
+                      MouseLeftButtonUp="ColorField_MouseLeftButtonUp">
+                    <Rectangle Fill="{StaticResource WhiteOverlayBrush}"
+                               IsHitTestVisible="False" />
+                    <Rectangle Fill="{StaticResource BlackOverlayBrush}"
+                               IsHitTestVisible="False" />
+                    <Canvas IsHitTestVisible="False">
+                        <Ellipse x:Name="ColorMarker"
+                                 Width="16"
+                                 Height="16"
+                                 Fill="Transparent"
+                                 Stroke="White"
+                                 StrokeThickness="2">
+                            <Ellipse.Effect>
+                                <DropShadowEffect Color="Black"
+                                                  BlurRadius="3"
+                                                  ShadowDepth="0"
+                                                  Opacity="0.9" />
+                            </Ellipse.Effect>
+                        </Ellipse>
+                    </Canvas>
                 </Grid>
             </Border>
 
             <Grid Grid.Row="1"
                   Margin="0,12,0,0">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="28" />
+                    <ColumnDefinition Width="34" />
+                    <ColumnDefinition Width="48" />
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="56" />
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="RedLabel"
-                           VerticalAlignment="Center"
-                           Foreground="{DynamicResource TextBrush}"
-                           Text="Red" />
-                <Slider x:Name="RedSlider"
-                        Grid.Column="1"
-                        Minimum="0"
-                        Maximum="255"
-                        TickFrequency="1"
-                        IsSnapToTickEnabled="True"
-                        ValueChanged="ChannelSlider_ValueChanged" />
-                <TextBox x:Name="RedValueBox"
-                           Grid.Column="2"
-                           VerticalAlignment="Center"
-                           Margin="8,0,0,0"
-                           Padding="4,2"
-                           TextAlignment="Center"
-                           Text="0"
-                           LostFocus="ChannelValueBox_LostFocus"
-                           KeyDown="ChannelValueBox_KeyDown" />
+                <Button x:Name="EyedropperButton"
+                        Width="28"
+                        Height="28"
+                        Padding="4"
+                        HorizontalAlignment="Left"
+                        ToolTip="Pick a color from the screen"
+                        Click="EyedropperButton_Click">
+                    <Path Width="18"
+                          Height="18"
+                          Stretch="Uniform"
+                          Stroke="{DynamicResource TextBrush}"
+                          StrokeThickness="1.7"
+                          Data="M 12,3 L 17,8 M 10,5 L 15,10 M 10,5 L 3,12 L 2,17 L 7,16 L 15,8 M 12,3 L 15,1 L 19,5 L 17,8" />
+                </Button>
+                <Grid Grid.Column="1"
+                      Width="36"
+                      Height="36"
+                      HorizontalAlignment="Left">
+                    <Ellipse Fill="{StaticResource CheckerBrush}"
+                             Stroke="{DynamicResource BorderBrush}"
+                             StrokeThickness="1" />
+                    <Ellipse x:Name="PreviewSwatch"
+                             Stroke="{DynamicResource BorderBrush}"
+                             StrokeThickness="1" />
+                </Grid>
+                <Border Grid.Column="2"
+                        Height="22"
+                        Margin="4,0,4,0"
+                        VerticalAlignment="Center"
+                        CornerRadius="5"
+                        BorderThickness="1"
+                        BorderBrush="{DynamicResource BorderBrush}"
+                        ClipToBounds="True">
+                    <Grid x:Name="HueField"
+                          Background="{StaticResource HueStripBrush}"
+                          SizeChanged="HueField_SizeChanged"
+                          MouseLeftButtonDown="HueField_MouseLeftButtonDown"
+                          MouseMove="HueField_MouseMove"
+                          MouseLeftButtonUp="HueField_MouseLeftButtonUp">
+                        <Canvas IsHitTestVisible="False">
+                            <Border x:Name="HueMarker"
+                                    Width="12"
+                                    Height="22"
+                                    CornerRadius="3"
+                                    BorderThickness="2"
+                                    BorderBrush="White"
+                                    Background="Transparent">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="Black"
+                                                      BlurRadius="3"
+                                                      ShadowDepth="0"
+                                                      Opacity="0.9" />
+                                </Border.Effect>
+                            </Border>
+                        </Canvas>
+                    </Grid>
+                </Border>
             </Grid>
 
-            <Grid Grid.Row="2"
-                  Margin="0,10,0,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="28" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="56" />
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="GreenLabel"
-                           VerticalAlignment="Center"
-                           Foreground="{DynamicResource TextBrush}"
-                           Text="Green" />
-                <Slider x:Name="GreenSlider"
-                        Grid.Column="1"
-                        Minimum="0"
-                        Maximum="255"
-                        TickFrequency="1"
-                        IsSnapToTickEnabled="True"
-                        ValueChanged="ChannelSlider_ValueChanged" />
-                <TextBox x:Name="GreenValueBox"
-                           Grid.Column="2"
-                           VerticalAlignment="Center"
-                           Margin="8,0,0,0"
-                           Padding="4,2"
-                           TextAlignment="Center"
-                           Text="0"
-                           LostFocus="ChannelValueBox_LostFocus"
-                           KeyDown="ChannelValueBox_KeyDown" />
-            </Grid>
+            <TextBlock x:Name="HexValueText"
+                       Grid.Row="2"
+                       Margin="0,8,0,0"
+                       HorizontalAlignment="Right"
+                       FontSize="12"
+                       Foreground="{DynamicResource SubtleTextBrush}" />
 
             <Grid Grid.Row="3"
-                  Margin="0,10,0,0">
+                  Margin="0,12,0,0">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="28" />
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="56" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="BlueLabel"
-                           VerticalAlignment="Center"
-                           Foreground="{DynamicResource TextBrush}"
-                           Text="Blue" />
-                <Slider x:Name="BlueSlider"
-                        Grid.Column="1"
-                        Minimum="0"
-                        Maximum="255"
-                        TickFrequency="1"
-                        IsSnapToTickEnabled="True"
-                        ValueChanged="ChannelSlider_ValueChanged" />
-                <TextBox x:Name="BlueValueBox"
-                           Grid.Column="2"
-                           VerticalAlignment="Center"
-                           Margin="8,0,0,0"
-                           Padding="4,2"
-                           TextAlignment="Center"
-                           Text="0"
-                           LostFocus="ChannelValueBox_LostFocus"
-                           KeyDown="ChannelValueBox_KeyDown" />
+                <StackPanel Grid.Column="0"
+                            Margin="0,0,8,0">
+                    <TextBox x:Name="RedValueBox"
+                             Padding="4,5"
+                             TextAlignment="Center"
+                             Foreground="{DynamicResource TextBrush}"
+                             Background="{DynamicResource PanelBrush}"
+                             BorderBrush="{DynamicResource BorderBrush}"
+                             LostFocus="ChannelValueBox_LostFocus"
+                             KeyDown="ChannelValueBox_KeyDown" />
+                    <TextBlock x:Name="RedLabel"
+                               Margin="0,4,0,0"
+                               HorizontalAlignment="Center"
+                               Foreground="{DynamicResource SubtleTextBrush}"
+                               Text="R" />
+                </StackPanel>
+                <StackPanel Grid.Column="1"
+                            Margin="4,0,4,0">
+                    <TextBox x:Name="GreenValueBox"
+                             Padding="4,5"
+                             TextAlignment="Center"
+                             Foreground="{DynamicResource TextBrush}"
+                             Background="{DynamicResource PanelBrush}"
+                             BorderBrush="{DynamicResource BorderBrush}"
+                             LostFocus="ChannelValueBox_LostFocus"
+                             KeyDown="ChannelValueBox_KeyDown" />
+                    <TextBlock x:Name="GreenLabel"
+                               Margin="0,4,0,0"
+                               HorizontalAlignment="Center"
+                               Foreground="{DynamicResource SubtleTextBrush}"
+                               Text="G" />
+                </StackPanel>
+                <StackPanel Grid.Column="2"
+                            Margin="8,0,0,0">
+                    <TextBox x:Name="BlueValueBox"
+                             Padding="4,5"
+                             TextAlignment="Center"
+                             Foreground="{DynamicResource TextBrush}"
+                             Background="{DynamicResource PanelBrush}"
+                             BorderBrush="{DynamicResource BorderBrush}"
+                             LostFocus="ChannelValueBox_LostFocus"
+                             KeyDown="ChannelValueBox_KeyDown" />
+                    <TextBlock x:Name="BlueLabel"
+                               Margin="0,4,0,0"
+                               HorizontalAlignment="Center"
+                               Foreground="{DynamicResource SubtleTextBrush}"
+                               Text="B" />
+                </StackPanel>
             </Grid>
 
             <Grid Grid.Row="4"
-                  Margin="0,10,0,0">
+                  Margin="0,14,0,0">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="28" />
+                    <ColumnDefinition Width="58" />
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="56" />
+                    <ColumnDefinition Width="54" />
                 </Grid.ColumnDefinitions>
                 <TextBlock x:Name="AlphaLabel"
                            VerticalAlignment="Center"
@@ -176,33 +258,36 @@
                         Maximum="255"
                         TickFrequency="1"
                         IsSnapToTickEnabled="True"
-                        ValueChanged="ChannelSlider_ValueChanged" />
+                        ValueChanged="AlphaSlider_ValueChanged" />
                 <TextBox x:Name="AlphaValueBox"
-                           Grid.Column="2"
-                           VerticalAlignment="Center"
-                           Margin="8,0,0,0"
-                           Padding="4,2"
-                           TextAlignment="Center"
-                           Text="255"
-                           LostFocus="ChannelValueBox_LostFocus"
-                           KeyDown="ChannelValueBox_KeyDown" />
+                         Grid.Column="2"
+                         Margin="8,0,0,0"
+                         Padding="4,3"
+                         VerticalAlignment="Center"
+                         TextAlignment="Center"
+                         Foreground="{DynamicResource TextBrush}"
+                         Background="{DynamicResource PanelBrush}"
+                         BorderBrush="{DynamicResource BorderBrush}"
+                         LostFocus="ChannelValueBox_LostFocus"
+                         KeyDown="ChannelValueBox_KeyDown" />
             </Grid>
 
             <StackPanel Grid.Row="5"
-                        Margin="0,12,0,0"
+                        Margin="0,16,0,0"
+                        VerticalAlignment="Bottom"
                         HorizontalAlignment="Right"
                         Orientation="Horizontal">
-                <Button x:Name="CancelButton"
-                        Width="72"
-                        Margin="0,0,8,0"
-                        IsCancel="True"
-                        Click="CancelButton_Click"
-                        Content="Cancel" />
                 <Button x:Name="ConfirmButton"
-                        Width="72"
+                        Width="76"
+                        Margin="0,0,8,0"
                         IsDefault="True"
                         Click="ConfirmButton_Click"
                         Content="OK" />
+                <Button x:Name="CancelButton"
+                        Width="76"
+                        IsCancel="True"
+                        Click="CancelButton_Click"
+                        Content="Cancel" />
             </StackPanel>
         </Grid>
     </Border>
